@@ -3,7 +3,8 @@
 
 Explanation of the scripts:
 
-1. The conversion script: event_to_pkl_modules.py 
+**The conversion script: event_to_pkl_modules.py 
+**
 
 The data output of each individual module is stored in h5 file format and contains the pixel hit information
   Hits information
