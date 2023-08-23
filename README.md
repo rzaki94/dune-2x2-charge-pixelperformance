@@ -4,7 +4,7 @@ Designed to study the pixel performance in the 2x2 ArgonCube prototype at Fermil
 
 # Explanation of the scripts:
 
-# The conversion script: event_to_pkl_modules.py
+# 1. The conversion script: event_to_pkl_modules.py
 
 The data output of each individual module is stored in h5 file format and contains the pixel hit information
   Hits information
