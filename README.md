@@ -2,7 +2,7 @@
 
 Designed to study the pixel performance in the 2x2 ArgonCube prototype at Fermilab & run in-situ diagnostics
 
-# Explanation of the scripts:
+# Explanation of scripts
 
 # 1. The conversion script: event_to_pkl_modules.py
 
