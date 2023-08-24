@@ -5,9 +5,13 @@ Designed to study the pixel performance in the 2x2 ArgonCube prototype at Fermil
 Links to NERSC file storage for individual modules:
 
 mod0_dir = '/global/cfs/projectdirs/dune/www/data/Module0/TPC1+2/dataRuns/tracksData/'
+
 mod1_dir = '/global/cfs/projectdirs/dune/www/data/Module1/reco/charge_only/'
+
 mod2_dir = '/global/cfs/projectdirs/dune/www/data/Module2/charge_reco/v1/TPC12_run2/'
+
 mod3_dir = '/global/cfs/projectdirs/dune/www/data/Module3/run3/reco/tpc12/'
+
 mod_sim  = '/global/cfs/projectdirs/dune/www/data/Module0/simulation/larndsim/20211223/reco/'
 
 # Explanation of scripts
