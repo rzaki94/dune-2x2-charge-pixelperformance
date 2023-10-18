@@ -16,7 +16,7 @@ mod_sim  = '/global/cfs/projectdirs/dune/www/data/Module0/simulation/larndsim/20
 
 # Explanation of scripts
 
-# 1. The conversion script: event_to_pkl_modules.py
+# 1. The conversion script: h5_to_pkl_modules.py
 
 The data output of each individual module is stored in h5 file format and contains the pixel hit information (**keep in mind to use the reco.h5 files**
   Hits information
@@ -33,7 +33,7 @@ The data output of each individual module is stored in h5 file format and contai
 
 Output: 2 files for each drift volume containing: ['px', 'py', 'ts', 'q'] (px = x position, py = y position, ts = drift time since event start, q = deposited charge)
 
-# 2. The Hough line algorithm script: get_hough.py
+# 2. The Hough line algorithm script: get_Hough.py
 
 Now that the x, y & time for each hit is stored and the files have been trimmed, tracks can be found for each individual event with a hough line transformation (HL) algorithm
 
@@ -46,7 +46,7 @@ The leading function: GetLinesEvents
     - set_newhlcenter: sets the new center 
 
   - Assigns the radius around the main ionization line that hits should be saved in
-    - Hits should be within drift volume (z > 0, z < 305)
+    - Hits should be within drift volume (z > 0, z < 315)
       
   - Loops over all events and finds track that fit the following **tunable** requirements:
     - A minimum of 100 points in the hit cloud to be identified as a line, maximum of 5 lines found in an event
@@ -58,15 +58,15 @@ The leading function: GetLinesEvents
     - List of dataframes of hough lines ['aX', 'aY', 'aZ', 'bX', 'bY', 'bZ', 'trackL'] (a* = midpoints, b* = angles, track length) &
     - associated event ['start_X', 'start_Y', 'start_Z', 'EnergyDeposit', 'd_hl_0'] (start_* = position, energy deposit, distance between hit and hough line "0")
    
-# 3. The pixel performance script: get_effs.py
+# 3. The pixel performance script: getRandomSeg.py
 
-The framework is set up to find the pixel efficiencies. There are several methods of plotting the performance, which justify the information that we store in the output file. The main function will be discussed first. On the one hand, there is the track segmentation method. On the other hand, there is the impact parameter study (point of closest approach). Both study the distance to the pixel center.
+The framework is set up to find the pixel efficiencies. There are several methods of plotting the performance, which justify the information that we store in the output file. 
 
 ![image](https://github.com/rzaki94/dune-2x2-charge-pixelperformance/assets/60906881/e5e53262-90dd-4472-a23d-489280653020)
 
 
 The leading function: findpixelefficiency
-  - 
 
+TBC
 
 

@@ -1,92 +1,108 @@
 import pandas as pd
 import numpy as np
 import subprocess
-import matplotlib.pyplot as plt
+import pickle
 from skspatial.objects import Plane
 from skspatial.objects import Line
+from skspatial.plotting import plot_3d
 
-# Utility functions that support the main script
+# Getting the lines for each individual event
 
-# First sections contains the main function in GetLinesEvent, which is called from "get_hough" to find hough lines in each individual event
+def GetLinesEvent(event, filename, min_pixels, MAX_peaks, radius):
 
-def GetLinesEvent(event, radius):
+    # Change naming scheme to what we use later on (could also be removed by changing the initial naming scheme in h5_to_pkl_modules)
+    event.rename(columns={'px': 'start_X', 'py': 'start_Y', 'z': 'start_Z', 'q': 'EnergyDeposit'}, inplace=True)
 
-    min_pixels = 100
-    MAX_peaks = 5
+    # Finding the lines
+    df_houghs = HoughOnArray5(event, filename, min_pixels, MAX_peaks)
 
-    if type(event) == int:
-        return 0, 0
+    # no line => return 0, more than 1 line => return 0
+    if len(df_houghs) == 0 or len(df_houghs) > 1:
+        return 0
 
-    event.rename(columns={'px': 'start_X', 'py': 'start_Y', 'ts': 'start_Z', 'q': 'EnergyDeposit'}, inplace=True)
+    # find the distance between the line and the hit pixels
+    d_pnt2line(event, df_houghs)
 
-    df_hough_w_endpoints = HoughOnArray(event, min_pixels, MAX_peaks)
+    for line_num, line in df_houghs.iterrows():
 
-    if len(df_hough_w_endpoints) != 1:
-        return 0, 0
+        if np.abs(line['bZ']) < 5*10e-4:
+            line['npoints'] = 0
+            df_houghs.loc[line_num] = line
 
-    d_pnt2line(event, df_hough_w_endpoints)
-    hc_l = get_hlcenter()
+            if len(df_houghs) == 1:
+                return 0
 
-    if np.abs(hc_l['bZ'].values) < 5 * 10e-4:
-        hc_l['npoints'] = 0
-        return 0, 0
+            if (df_houghs['bZ'] < 5*10e-4).all():
+                return 0
+
+            continue
+
+        try:
+            hits_on_hline_hcl, track_L_hcl = trackLengthhoughcenter(event, line, line_num, 6)
+
+        except:
+            line['npoints'] = 0
+            df_houghs.loc[line_num] = line
+            print('no good')
+            continue
+
+        hits_on_hline_hcl2, track_L_hcl2 = trackLengthhoughcenter(event, line, line_num, radius)
+
+        hits_on_hline_hcl2['start_X'] = np.round(hits_on_hline_hcl2['start_X'], decimals=3)
+        hits_on_hline_hcl2['start_Y'] = np.round(hits_on_hline_hcl2['start_Y'], decimals=3)
+        hits_on_hline_hcl2['start_Z'] = np.round(hits_on_hline_hcl2['start_Z'], decimals=3)
+        hits_on_hline_hcl2['EnergyDeposit'] = np.round(hits_on_hline_hcl2['EnergyDeposit'], decimals=3)
+
+        try:
+            set_newhlcenter(hits_on_hline_hcl, line)
+        except:
+            line['npoints'] = 0
+            df_houghs.loc[line_num] = line
+            print('no good')
+            continue
+
+        if line['aX'] == 0 and line['bX'] == 0:
+            line['npoints'] = 0
+            df_houghs.loc[line_num] = line
+            continue
+
+        line['npoints'] = track_L_hcl[0]
+        df_houghs.loc[line_num] = line
+
+    df_houghs = df_houghs[df_houghs.npoints != 0]
+    df_houghs.rename(columns={'npoints': 'trackL'}, inplace=True)
 
     try:
-        hits_on_hline_hcl2, track_L_hcl2 = trackLengthhoughcenter(event, hc_l.iloc[0], 0, 10)
-
+        return df_houghs, hits_on_hline_hcl2
     except:
-        hc_l['npoints'] = 0
-        return 0,0
+        return 0
 
-    hits_on_hline_hcl = hits_on_hline_hcl2[hits_on_hline_hcl2['d_hl_0']<radius]
-    track_L_hcl = hits_on_hline_hcl['d_2_avg2'].nlargest(1).values
+# Calling the external c++ script to find the lines
 
-    hits_on_hline_hcl2['start_X'] = np.round(hits_on_hline_hcl2['start_X'], decimals=3)
-    hits_on_hline_hcl2['start_Y'] = np.round(hits_on_hline_hcl2['start_Y'], decimals=3)
-    hits_on_hline_hcl2['start_Z'] = np.round(hits_on_hline_hcl2['start_Z'], decimals=3)
+def HoughOnArray5(arrayname, filename, min_pixels=125, MAX_peaks=100):
 
-    try:
-        line2 = set_newhlcenter(hits_on_hline_hcl, hc_l.iloc[0])
-
-    except:
-        hc_l['npoints'] = 0
-        return 0,0
-
-    if line2['aX'] == 0 and line2['bX'] == 0:
-        line2['npoints'] = 0
-        return 0,0
-
-    line2['npoints'] = track_L_hcl[0]
-    hc_l.rename(columns={'npoints': 'trackL'}, inplace=True)
-    hc_l.iloc[0] = line2
-    return hc_l, hits_on_hline_hcl2
-
-
-
-def HoughOnArray(arrayname, min_pixels=125, MAX_peaks=100):
     df_LAr = arrayname
-
-    df_LAr.to_csv('./hough3D_inputfile_start.csv',
+    df_LAr.to_csv('./hough3D_inputfile_start' + filename.split('/')[-1][:-3] + '.csv',
                   columns=['start_X', 'start_Y', 'start_Z'], index=False, header=False)
 
     subprocess.check_call([r"./Hough3Dpackage/hough3dlines",
-                           "./hough3D_inputfile_start.csv",
-                           "-o", "./hough3D_outputfile.csv",
+                           "./hough3D_inputfile_start" + filename.split('/')[-1][:-3]+ ".csv",
+                           "-o", "./hough3D_outputfile" + filename.split('/')[-1][:-3] +".csv",
                            "-minvotes", str(min_pixels),
                            "-nlines", str(MAX_peaks),
                            "-raw"])
 
-    with open('./hough3D_outputfile.csv', 'r') as fin:
+    with open('./hough3D_outputfile' + filename.split('/')[-1][:-3] + '.csv', 'r') as fin:
         data = fin.read().splitlines(True)
         t_bounds = data[1:2][0].split()
         t_min = int(np.floor(float(t_bounds[0])))
         t_max = int(np.ceil(float(t_bounds[1])))
         t_space = np.array([t_min, t_max])
 
-    with open('./hough3D_outputfile.csv', 'w') as fout:
+    with open('./hough3D_outputfile' + filename.split('/')[-1][:-3] + '.csv', 'w') as fout:
         fout.writelines(data[2:])
 
-    df_hough = pd.read_csv("./hough3D_outputfile.csv",
+    df_hough = pd.read_csv("./hough3D_outputfile" + filename.split('/')[-1][:-3] + ".csv",
                            delim_whitespace=True, names=['aX', 'aY', 'aZ', 'bX', 'bY', 'bZ', 'npoints'])
 
     df_hough['xh_i'] = df_hough['aX'].values + t_space[0] * df_hough['bX'].values
@@ -98,10 +114,12 @@ def HoughOnArray(arrayname, min_pixels=125, MAX_peaks=100):
 
     return df_hough
 
-def d_pnt2line(df_True, df_hough_w_endpoints):
+# Finding the distance between the line and the voxels (3D)
+
+def d_pnt2line(df_True, df_houghs):
     A = df_True[['start_X', 'start_Y', 'start_Z']]
-    B = np.array([df_hough_w_endpoints['xh_i'], df_hough_w_endpoints['yh_i'], df_hough_w_endpoints['zh_i']]).T
-    C = np.array([df_hough_w_endpoints['xh_f'], df_hough_w_endpoints['yh_f'], df_hough_w_endpoints['zh_f']]).T
+    B = np.array([df_houghs['xh_i'], df_houghs['yh_i'], df_houghs['zh_i']]).T
+    C = np.array([df_houghs['xh_f'], df_houghs['yh_f'], df_houghs['zh_f']]).T
 
     for idx, (b, c) in enumerate(zip(B, C)):
         d = (c - b) / np.linalg.norm(c - b)
@@ -113,39 +131,7 @@ def d_pnt2line(df_True, df_hough_w_endpoints):
 
     return df_True
 
-
-def hl_endpoints(hc_l):
-    hc_l['xh_i'] = hc_l['aX'].values + 0.5 * hc_l['trackL'] * hc_l['bX'].values
-    hc_l['xh_f'] = hc_l['aX'].values - 0.5 * hc_l['trackL'] * hc_l['bX'].values
-    hc_l['yh_i'] = hc_l['aY'].values + 0.5 * hc_l['trackL'] * hc_l['bY'].values
-    hc_l['yh_f'] = hc_l['aY'].values - 0.5 * hc_l['trackL'] * hc_l['bY'].values
-    hc_l['zh_i'] = hc_l['aZ'].values + 0.5 * hc_l['trackL'] * hc_l['bZ'].values
-    hc_l['zh_f'] = hc_l['aZ'].values - 0.5 * hc_l['trackL'] * hc_l['bZ'].values
-
-    return hc_l
-
-def d_pnt2line_test_XY(df, df_hough_w_endpoints):
-
-    df_True = df.copy(deep=True)
-
-    A = df_True[['start_X', 'start_Y']]
-    B = np.array([df_hough_w_endpoints['xh_i'], df_hough_w_endpoints['yh_i']]).T
-    C = np.array([df_hough_w_endpoints['xh_f'], df_hough_w_endpoints['yh_f']]).T
-
-    for idx, (b, c) in enumerate(zip(B, C)):
-        d = (c - b) / np.linalg.norm(c - b)
-        v = A - b
-        t = np.dot(v, d)
-        P = np.array([t_temp * d + b for t_temp in t])
-
-        df_True['d_hl_' + str(idx) + 'x_res'] = (A - P)['start_X']
-        df_True['d_hl_' + str(idx) + 'y_res'] = (A - P)['start_Y']
-
-        DIST = np.sqrt(np.einsum('ij,ij->i', P - A, P - A))
-        df_True['d_hl_' + str(idx)] = DIST
-
-    return df_True
-
+# Finding the energy in a certain radius
 
 def EnergyInRadiusLine(df, line_num, R):
     df_hits_on_hline = df.copy()
@@ -155,6 +141,8 @@ def EnergyInRadiusLine(df, line_num, R):
     energy_T_hcl = df_hits_on_hline['EnergyDeposit'].sum()
 
     return energy_T_hcl
+
+# Find the actual tracklength based on the most distance points close to the track
 
 def trackLengthhoughcenter(df, hl_c, line_num, radius):
     df_hits_on_hline = df.copy()
@@ -177,13 +165,16 @@ def trackLengthhoughcenter(df, hl_c, line_num, radius):
 
     return df_hits_on_hline, df_hits_on_hline['d_2_avg2'].nlargest(1).values
 
+# Find the hough line center
 
-def get_hlcenter():
-    hc_l = pd.read_csv("./hough3D_outputfile.csv",
+def get_hlcenter(filename):
+    hc_l = pd.read_csv("./hough3D_outputfile" + filename.split('/')[-1][:-3] + ".csv",
                        delim_whitespace=True, names=['aX', 'aY', 'aZ', 'bX', 'bY', 'bZ', 'npoints'])
 
     return hc_l
 
+
+# Set the new hough line center 
 
 def set_newhlcenter(hits_on_hline_hcl, line):
 
@@ -209,244 +200,6 @@ def set_newhlcenter(hits_on_hline_hcl, line):
     line2['aZ'] = line['aZ'] + shift * coeff * line['bZ']
 
     return line2
-
-def Get_ratio_MIP(df, R1, R2):
-
-    E_1 = EnergyInRadiusLine(df, 0, R1)
-    E_2 = EnergyInRadiusLine(df, 0, R2)
-
-    return E_1/E_2
-
-def point_in_vol(point):
-
-    x0 = -315
-    x1 = 315
-    y0 = -615
-    y1 = 615
-    z0 = -300
-    z1 = 300
-
-    if x0 <= point[0] <= x1 and y0 <= point[1] <= y1 and z0 <= point[2] <= z1:
-        return True
-
-    return False
-
-def track_entry(df):
-
-    df_hough = df
-
-    plane_t = Plane.from_points([300, -600, 300], [300, -600, -300], [-300, -600, 300])
-    plane_b = Plane.from_points([300, 600, 300], [300, 600, -300], [-300, 600, 300])
-
-    plane_f = Plane.from_points([300, -600, 300], [300, 600, 300], [-300, -600, 300])
-    plane_r = Plane.from_points([300, -600, -300], [300, 600, -300], [-300, -600, -300])
-
-    plane_l = Plane.from_points([-300, -600, 300], [-300, 600, 300], [-300, -600, -300])
-    plane_v = Plane.from_points([300, -600, 300], [300, 600, 300], [300, -600, -300])
-
-    for houghline in df_hough.iloc:
-        line = Line([houghline['aX'], houghline['aY'], houghline['aZ']],
-                    [houghline['bX'], houghline['bY'], houghline['bZ']])
-
-
-        try:
-            point_t = plane_t.intersect_line(line)
-            point_b = plane_b.intersect_line(line)
-
-            #front/rear
-            point_f = plane_f.intersect_line(line)
-            point_r = plane_r.intersect_line(line)
-
-            #left/right
-            point_l = plane_l.intersect_line(line)
-            point_v = plane_v.intersect_line(line)
-
-        except:
-            continue
-
-        point_list = [point_t, point_b, point_f, point_r, point_l, point_v]
-        surv_point_list = []
-
-        for point in point_list:
-            surv_point_list.append(point_in_vol(point))
-
-    try:
-        return surv_point_list
-    except:
-        return [0, 0, 0]
-
-
-def pixel_bins_edges():
-    ps = 4.434
-
-    bins_pixel_x_ht = np.arange(-308.173 - (ps / 2), -3, ps)
-    bins_pixel_x_ht2 = -np.arange(-308.173 - (ps / 2), -3, ps)[::-1]
-    bins_pixel_x = np.r_[bins_pixel_x_ht, bins_pixel_x_ht2]
-
-    bins_pixel_y_ht = -np.arange(-303.739 - ps / 2, -3, ps)[::-1]
-    bins_pixel_y_ht2 = np.arange(316.661 - ps / 2, 615, ps)
-    bins_pixel_y_ht3 = np.r_[bins_pixel_y_ht, bins_pixel_y_ht2]
-    bins_pixel_y = np.r_[-bins_pixel_y_ht3[::-1], bins_pixel_y_ht3]
-
-    return bins_pixel_x, bins_pixel_y
-
-
-def pixel_bins_mid():
-    ps = 4.434
-
-    bins_pixel_x_ht = np.arange(-308.173, -3, ps)
-    bins_pixel_x_ht2 = -np.arange(-308.173, -3, ps)[::-1]
-    bins_pixel_x = np.r_[bins_pixel_x_ht, bins_pixel_x_ht2]
-
-    bins_pixel_y_ht = -np.arange(-303.739, -3, ps)[::-1]
-    bins_pixel_y_ht2 = np.arange(316.661, 615, ps)
-    bins_pixel_y_ht3 = np.r_[bins_pixel_y_ht, bins_pixel_y_ht2]
-    bins_pixel_y = np.r_[-bins_pixel_y_ht3[::-1], bins_pixel_y_ht3]
-
-    return bins_pixel_x, bins_pixel_y
-
-def pixel_clean_up(df, df_ht, borderw=0):
-    df_clean_pixel = df.copy()
-
-    border = borderw
-    x_min = np.min(np.min(df_ht[['xh_i', 'xh_f']])) - border
-    x_max = np.max(np.max(df_ht[['xh_i', 'xh_f']])) + border
-    y_min = np.min(np.min(df_ht[['yh_i', 'yh_f']])) - border
-    y_max = np.max(np.max(df_ht[['yh_i', 'yh_f']])) + border
-
-    df_clean_pixel = df_clean_pixel[df_clean_pixel['x'] > x_min]
-    df_clean_pixel = df_clean_pixel[df_clean_pixel['x'] < x_max]
-    df_clean_pixel = df_clean_pixel[df_clean_pixel['y'] > y_min]
-    df_clean_pixel = df_clean_pixel[df_clean_pixel['y'] < y_max]
-
-    return df_clean_pixel
-
-def pixel_bins_mid_test():
-    ps = 4.434
-
-    bins_pixel_x_ht = np.arange(-308.173, -3, ps)
-    bins_pixel_x_ht2 = -np.arange(-308.173, -3, ps)[::-1]
-    bins_pixel_x = np.r_[bins_pixel_x_ht, bins_pixel_x_ht2]
-
-    bins_pixel_y_ht = -np.arange(-308.173, -3, ps)[::-1]
-    bins_pixel_y_ht2 = np.arange(316.661, 612, ps)
-    bins_pixel_y_ht3 = np.r_[bins_pixel_y_ht, bins_pixel_y_ht2]
-    bins_pixel_y = np.r_[-bins_pixel_y_ht3[::-1], bins_pixel_y_ht3]
-
-    return bins_pixel_x, bins_pixel_y
-
-def pixel_bins_edge_test():
-    ps = 4.434
-
-    bins_pixel_x_ht = np.arange(-308.173 - ps/2, -3, ps)
-    bins_pixel_x_ht2 = -np.arange(-308.173 - ps/2, -3, ps)[::-1]
-    bins_pixel_x = np.r_[bins_pixel_x_ht, bins_pixel_x_ht2]
-
-    bins_pixel_y_ht = -np.arange(-310.39, -3, ps)[::-1]
-    bins_pixel_y_ht2 = np.arange(312.227 + ps/2, 615, ps)
-    bins_pixel_y_ht3 = np.r_[bins_pixel_y_ht, bins_pixel_y_ht2]
-    bins_pixel_y = np.r_[-bins_pixel_y_ht3[::-1], bins_pixel_y_ht3]
-
-    return bins_pixel_x, bins_pixel_y
-
-def pixel_bins_mid_test_mod1():
-    ps = 4.434
-
-    bins_pixel_x_ht = np.arange(-308.163, -1, ps)
-    bins_pixel_x_ht2 = -np.arange(-308.163, -1, ps)[::-1]
-    bins_pixel_x = np.r_[bins_pixel_x_ht, bins_pixel_x_ht2]
-
-    bins_pixel_y_ht = -np.arange(-303.729, -3, ps)[::-1]
-    bins_pixel_y_ht2 = np.arange(317.031, 615, ps)
-    bins_pixel_y_ht3 = np.r_[bins_pixel_y_ht, bins_pixel_y_ht2]
-    bins_pixel_y = np.r_[-bins_pixel_y_ht3[::-1], bins_pixel_y_ht3]
-
-    return bins_pixel_x, bins_pixel_y
-
-def pixel_bins_mid_test_mod2():
-    ps = 3.8
-
-    bins_pixel_x_ht = np.arange(-305.29, -4, ps)
-    bins_pixel_x_ht2 = -np.arange(-305.29, -4, ps)[::-1]
-    bins_pixel_x = np.r_[bins_pixel_x_ht, bins_pixel_x_ht2]
-
-    bins_pixel_y_ht = -np.arange(-305.29, -5, ps)[::-1]
-    bins_pixel_y_ht2 = np.arange(315.47, 616, ps)
-    bins_pixel_y_ht3 = np.r_[bins_pixel_y_ht, bins_pixel_y_ht2]
-    bins_pixel_y = np.r_[-bins_pixel_y_ht3[::-1], bins_pixel_y_ht3]
-
-    return bins_pixel_x, bins_pixel_y
-
-def pixel_bins_mid_test_mod3():
-    ps = 4.434
-
-    bins_pixel_x_ht = np.arange(-308.163, -1, ps)
-    bins_pixel_x_ht2 = -np.arange(-308.163, -1, ps)[::-1]
-    bins_pixel_x = np.r_[bins_pixel_x_ht, 0, bins_pixel_x_ht2]
-
-    bins_pixel_y_ht = -np.arange(-303.729, -1, ps)[::-1]
-    bins_pixel_y_ht2 = np.arange(317.031, 615, ps)
-    bins_pixel_y_ht3 = np.r_[bins_pixel_y_ht, bins_pixel_y_ht2]
-    bins_pixel_y = np.r_[-bins_pixel_y_ht3[::-1], 0, bins_pixel_y_ht3]
-
-    return bins_pixel_x, bins_pixel_y
-
-def pixel_bins_edge_test_mod1():
-    ps = 4.434
-
-    bins_pixel_x_ht = np.arange(-308.163 - ps/2, -3, ps)
-    bins_pixel_x_ht2 = -np.arange(-308.163 - ps/2, -3, ps)[::-1]
-    bins_pixel_x = np.r_[bins_pixel_x_ht, bins_pixel_x_ht2]
-
-    bins_pixel_y_ht = -np.arange(-305.946, -3, ps)[::-1]
-    bins_pixel_y_ht2 = np.arange(314.814, 615, ps)
-    bins_pixel_y_ht3 = np.r_[bins_pixel_y_ht, bins_pixel_y_ht2]
-    bins_pixel_y = np.r_[-bins_pixel_y_ht3[::-1], bins_pixel_y_ht3]
-
-    return bins_pixel_x, bins_pixel_y
-
-def pixel_bins_edge_test_mod2():
-    ps = 3.8
-
-    bins_pixel_x_ht = np.arange(-305.29 - ps/2, -3, ps)
-    bins_pixel_x_ht2 = -np.arange(-305.29 -ps/2, -3, ps)[::-1]
-    bins_pixel_x = np.r_[bins_pixel_x_ht, bins_pixel_x_ht2]
-
-    bins_pixel_y_ht = -np.arange(-307.19, -3, ps)[::-1]
-    bins_pixel_y_ht2 = np.arange(313.57, 618, ps)
-    bins_pixel_y_ht3 = np.r_[bins_pixel_y_ht, bins_pixel_y_ht2]
-    bins_pixel_y = np.r_[-bins_pixel_y_ht3[::-1], bins_pixel_y_ht3]
-
-    return bins_pixel_x, bins_pixel_y
-
-def pixel_bins_edge_test_mod3():
-    ps = 4.434
-
-    bins_pixel_x_ht = np.arange(-308.163 - ps/2, -1, ps)
-    bins_pixel_x_ht2 = -np.arange(-308.163 -ps/2, -1, ps)[::-1]
-    bins_pixel_x = np.r_[bins_pixel_x_ht, 0, bins_pixel_x_ht2]
-
-    bins_pixel_y_ht = -np.arange(-614.109 - (4.434/2), 0, ps)[::-1]
-    bins_pixel_y = np.r_[-bins_pixel_y_ht[::-1], 0, bins_pixel_y_ht]
-
-    return bins_pixel_x, bins_pixel_y
-
-def pixel_bins_z_mid():
-
-    ps = 4.434
-
-    bins_pixels_z_ht = np.arange(0, 605, ps)
-
-    return bins_pixels_z_ht
-
-def pixel_bins_mid_z_mod2():
-
-    ps = 3.8
-
-    bins_pixels_z_ht = np.arange(0, 605, ps)
-
-    return bins_pixels_z_ht
-
 
 def get_pixels_subset(filename, subset_cat, k=10):
 
@@ -541,3 +294,75 @@ def get_pixels_subset(filename, subset_cat, k=10):
         bins_y = bins_pixel_y_edge
 
         return bins_x, bins_y
+
+# Get the ratio between the energy in two different radii
+
+def Get_ratio_MIP(df, R1, R2):
+
+    E_1 = EnergyInRadiusLine(df, 0, R1)
+    E_2 = EnergyInRadiusLine(df, 0, R2)
+
+    return E_1/E_2
+
+def point_in_vol(point):
+
+    x0 = -315
+    x1 = 315
+    y0 = -615
+    y1 = 615
+    z0 = -300
+    z1 = 300
+
+    if x0 <= point[0] <= x1 and y0 <= point[1] <= y1 and z0 <= point[2] <= z1:
+        return True
+
+    return False
+
+# See if line crosses the walls of the detector
+
+def track_entry(df, plot=True):
+
+    df_hough = df
+
+    plane_t = Plane.from_points([300, -600, 300], [300, -600, -300], [-300, -600, 300])
+    plane_b = Plane.from_points([300, 600, 300], [300, 600, -300], [-300, 600, 300])
+
+    plane_f = Plane.from_points([300, -600, 300], [300, 600, 300], [-300, -600, 300])
+    plane_r = Plane.from_points([300, -600, -300], [300, 600, -300], [-300, -600, -300])
+
+    plane_l = Plane.from_points([-300, -600, 300], [-300, 600, 300], [-300, -600, -300])
+    plane_v = Plane.from_points([300, -600, 300], [300, 600, 300], [300, -600, -300])
+
+    total_points = []
+    surv_point_list = [False, False, False, False, False, False]
+    for houghline in df_hough.iloc:
+
+        line = Line([houghline['aX'], houghline['aY'], houghline['aZ']],
+                    [houghline['bX'], houghline['bY'], houghline['bZ']])
+
+        try:
+            point_t = plane_t.intersect_line(line)
+            point_b = plane_b.intersect_line(line)
+
+            #front/rear
+            point_f = plane_f.intersect_line(line)
+            point_r = plane_r.intersect_line(line)
+
+            #left/right
+            point_l = plane_l.intersect_line(line)
+            point_v = plane_v.intersect_line(line)
+
+        except:
+            print('yes')
+            continue
+
+        point_list = [point_t, point_b, point_f, point_r, point_l, point_v]
+        surv_point_list = []
+
+        for point in point_list:
+            surv_point_list.append(point_in_vol(point))
+
+
+    return surv_point_list
+
+
